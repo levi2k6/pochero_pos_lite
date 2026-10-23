@@ -2,12 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pochero_pos_lite/main.dart';
 import 'package:pochero_pos_lite/models.dart';
+import 'package:pochero_pos_lite/payments_api.dart';
 import 'package:pochero_pos_lite/payments_repository.dart';
 import 'package:pochero_pos_lite/products_repository.dart';
+import 'package:pochero_pos_lite/session_store.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /// In-memory [PaymentsRepository] so widget tests never touch sqflite.
 class _FakePaymentsRepository implements PaymentsRepository {
   final List<Payment> payments = [];
+  final List<String> syncedIds = [];
 
   @override
   Future<List<Payment>> loadPayments() async => List.of(payments);
@@ -18,6 +22,26 @@ class _FakePaymentsRepository implements PaymentsRepository {
   @override
   Future<void> deletePayment(String id) async =>
       payments.removeWhere((payment) => payment.id == id);
+
+  @override
+  Future<void> markSynced(String id) async => syncedIds.add(id);
+}
+
+/// In-memory [PaymentsApi]; throws when [fail] is set.
+class _FakePaymentsApi implements PaymentsApi {
+  _FakePaymentsApi({this.fail = false});
+
+  final bool fail;
+  final List<Payment> created = [];
+
+  @override
+  Future<void> createPayment(Payment payment) async {
+    if (fail) throw Exception('offline');
+    created.add(payment);
+  }
+
+  @override
+  Future<Map<String, dynamic>?> getPayment(String id) async => null;
 }
 
 /// In-memory [ProductsRepository] so widget tests never touch sqflite.
@@ -45,13 +69,26 @@ class _FakeProductsRepository implements ProductsRepository {
   }
 }
 
-Widget _app() => PocheroPosLiteApp(
-      repository: _FakePaymentsRepository(),
-      productsRepository: _FakeProductsRepository(),
-    );
+Future<SessionStore> _loggedInSession() async {
+  SharedPreferences.setMockInitialValues({});
+  final prefs = await SharedPreferences.getInstance();
+  final session = SessionStore(prefs);
+  await session.login(
+    url: 'http://localhost:8080',
+    username: SessionStore.adminUsername,
+    password: SessionStore.adminPassword,
+  );
+  return session;
+}
 
 Future<void> _pumpApp(WidgetTester tester) async {
-  await tester.pumpWidget(_app());
+  await tester.pumpWidget(
+    PocheroPosLiteApp(
+      session: await _loggedInSession(),
+      repository: _FakePaymentsRepository(),
+      productsRepository: _FakeProductsRepository(),
+    ),
+  );
   await tester.pumpAndSettle();
 }
 
@@ -377,6 +414,7 @@ void main() {
 
     await tester.pumpWidget(
       PocheroPosLiteApp(
+        session: await _loggedInSession(),
         repository: payments,
         productsRepository: _FakeProductsRepository(),
       ),
@@ -393,5 +431,139 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Total (2)'), findsOneWidget);
+  });
+
+  testWidgets('a confirmed payment syncs and is marked clean', (tester) async {
+    final repository = _FakePaymentsRepository();
+    final api = _FakePaymentsApi();
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: await _loggedInSession(),
+        repository: repository,
+        productsRepository: _FakeProductsRepository(),
+        paymentsApi: api,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Pochero'));
+    await tester.pump();
+    await _confirmWithCash(tester, '500');
+
+    expect(api.created, hasLength(1));
+    expect(repository.syncedIds, contains(api.created.single.id));
+  });
+
+  testWidgets('a payment stays dirty when sync fails', (tester) async {
+    final repository = _FakePaymentsRepository();
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: await _loggedInSession(),
+        repository: repository,
+        productsRepository: _FakeProductsRepository(),
+        paymentsApi: _FakePaymentsApi(fail: true),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Pochero'));
+    await tester.pump();
+    await _confirmWithCash(tester, '500');
+
+    expect(repository.syncedIds, isEmpty);
+    expect(repository.payments.single.dirty, isTrue);
+  });
+
+  testWidgets('signed-out app shows login and opens the POS after login',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final session = SessionStore(prefs);
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: session,
+        repository: _FakePaymentsRepository(),
+        productsRepository: _FakeProductsRepository(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Login'), findsOneWidget);
+    expect(find.text('Current Order'), findsNothing);
+
+    await tester.enterText(
+      find.byType(TextFormField).at(0),
+      'http://localhost:8080',
+    );
+    await tester.enterText(find.byType(TextFormField).at(1), 'admin');
+    await tester.enterText(find.byType(TextFormField).at(2), '123');
+    await tester.tap(find.widgetWithText(FilledButton, 'Login'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Current Order'), findsOneWidget);
+    expect(session.isLoggedIn, isTrue);
+    expect(session.url, 'http://localhost:8080');
+  });
+
+  testWidgets('login shows an error for wrong credentials', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final session = SessionStore(prefs);
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: session,
+        repository: _FakePaymentsRepository(),
+        productsRepository: _FakeProductsRepository(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byType(TextFormField).at(0),
+      'http://localhost:8080',
+    );
+    await tester.enterText(find.byType(TextFormField).at(1), 'admin');
+    await tester.enterText(find.byType(TextFormField).at(2), 'wrong');
+    await tester.tap(find.widgetWithText(FilledButton, 'Login'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Invalid username or password.'), findsOneWidget);
+    expect(find.text('Current Order'), findsNothing);
+  });
+
+  testWidgets('logout returns to the login screen', (tester) async {
+    await _pumpApp(tester);
+
+    await tester.tap(find.byTooltip('Logout'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Login'), findsOneWidget);
+    expect(find.text('Current Order'), findsNothing);
+  });
+
+  test('session persists across instances and normalizes the URL', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    final first = SessionStore(prefs);
+
+    expect(
+      await first.login(
+        url: 'http://10.0.0.5:8080/',
+        username: SessionStore.adminUsername,
+        password: SessionStore.adminPassword,
+      ),
+      isTrue,
+    );
+
+    final second = SessionStore(prefs);
+    await second.load();
+
+    expect(second.isLoggedIn, isTrue);
+    expect(second.username, 'admin');
+    expect(second.url, 'http://10.0.0.5:8080');
   });
 }

@@ -18,6 +18,9 @@ abstract interface class PaymentsRepository {
 
   /// Removes a payment and its lines.
   Future<void> deletePayment(String id);
+
+  /// Marks the payment `dirty = 0` after a successful sync.
+  Future<void> markSynced(String id);
 }
 
 /// sqflite-backed [PaymentsRepository]: the device's offline store.
@@ -95,6 +98,17 @@ class SqflitePaymentsRepository implements PaymentsRepository {
         whereArgs: [id],
       );
     });
+  }
+
+  @override
+  Future<void> markSynced(String id) async {
+    final db = await _local.open();
+    await db.update(
+      PaymentsTable.name,
+      {PaymentsTable.dirty: 0},
+      where: '${PaymentsTable.id} = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<Map<String, List<CartLine>>> _itemsByPayment(Database db) async {

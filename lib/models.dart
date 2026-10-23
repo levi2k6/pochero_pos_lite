@@ -97,6 +97,19 @@ class Payment {
   final bool dirty;
 
   double get total => amount - change;
+
+  Payment copyWith({bool? dirty}) {
+    return Payment(
+      id: id,
+      type: type,
+      method: method,
+      amount: amount,
+      change: change,
+      updatedAt: updatedAt,
+      items: items,
+      dirty: dirty ?? this.dirty,
+    );
+  }
 }
 
 String formatPeso(double amount) => '₱${amount.toStringAsFixed(2)}';

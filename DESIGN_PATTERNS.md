@@ -1,8 +1,8 @@
 # Design Patterns & Conventions — pochero_pos_lite
 
 This is the small sibling of `../pochero_pos`. The full app has controllers,
-features folders, and backend sync — **don't bring those here.** Lite keeps the
-UI-first POS plus a thin sqflite store for payments.
+features folders, and heavy backend sync — **don't bring those here.** Lite keeps
+the UI-first POS plus a thin sqflite store and a thin REST client for payments.
 
 ## Prime directive: small and familiar
 
@@ -17,6 +17,8 @@ UI-first POS plus a thin sqflite store for payments.
 ```
 lib/
 ├── main.dart                    # PocheroPosLiteApp + theme + desktop FFI setup
+├── session_store.dart           # current user + backend URL (persisted)
+├── auth_screen.dart             # login form: URL, username, password
 ├── models.dart                  # TransactionType, PaymentMethod, Product,
 │                                #   RecipeItem, CartLine, Payment, formatters
 ├── payments_store.dart          # PaymentsStore (ChangeNotifier) over the repo
@@ -27,6 +29,7 @@ lib/
 ├── payment_details_screen.dart  # one payment: info box + items table
 ├── products_screen.dart         # product records: reorder + add
 ├── product_details_screen.dart  # one product: info box + recipe
+├── payments_api.dart            # PaymentsApi + REST client for the Go backend
 ├── payments_repository.dart     # PaymentsRepository + SqflitePaymentsRepository
 ├── products_repository.dart     # ProductsRepository + SqfliteProductsRepository
 ├── local_database.dart          # LocalDatabase (open/close/delete)
@@ -120,6 +123,30 @@ items      a snapshot copy of the cart lines
 dirty      true (still needs syncing)
 ```
 
+### 8. Login + REST sync (`session_store.dart`, `auth_screen.dart`, `payments_api.dart`)
+Login is a local gate, persisted with `shared_preferences`:
+
+- `SessionStore` (a `ChangeNotifier`) holds the current `username` and `url`.
+  `load()` restores them at startup; `login()` validates and persists;
+  `logout()` clears them.
+- There is **no backend user table yet**, so the only accepted credentials are
+  `SessionStore.adminUsername` (`admin`) / `adminPassword` (`123`). Do not add a
+  user sync layer until the backend schema exists.
+- The URL is validated as http(s) and stored without a trailing slash.
+- `PocheroPosLiteApp` listens to the session and shows `AuthScreen` when signed
+  out, `PosScreen` when signed in. The POS app bar has a logout action.
+
+`PaymentsApi` is the remote contract; `HttpPaymentsApi` implements it with
+`package:http` against the Go backend:
+
+- `POST /payment` with `paymentPayload(payment)` — snake_case columns from the
+  `payment` table plus an `items` array; `GET /payment/{id}` returns raw JSON.
+- The base URL is `SessionStore.url`, passed down as `PosScreen.backendUrl`.
+- `PaymentsStore.add` persists locally first (dirty), then calls `createPayment`.
+  On success it calls `PaymentsRepository.markSynced(id)` (sets `dirty = 0`) and
+  updates the in-memory payment; on failure the payment stays dirty.
+- `load()` fires `_syncPending()` so dirty payments are retried on startup.
+
 ## Database (sqflite)
 
 - `local_database.dart` owns the connection: `open()`, `close()`, `delete()`.
@@ -172,11 +199,12 @@ Mirror the full app's detail screen so the two stay visually consistent:
 1. Can it be done with the existing models + a `setState` or the store? Do that.
 2. New persisted data → a table file + `LocalDatabase` change + repository
    methods. Keep it to what the feature needs; no generic data layer.
-3. If it needs backend/sync, recipes/inventory, or `provider`, **ask first**:
-   that is the full app's territory.
+3. Remote calls go through `PaymentsApi` (add a method) and are best-effort;
+   keep the local store as the source of truth. Recipes/inventory or `provider`
+   are still the full app's territory — ask first.
 4. Build the screen from small private widgets; reuse `formatPeso`.
 5. Add a widget test (fake repository) and, for persistence, a real-sqlite test
-   under `test/`.
+   under `test/`; for REST, test against `MockClient` (`package:http/testing`).
 6. Run `flutter analyze` and `flutter test` (absolute binary in `README.md`).
 
 ## Verification

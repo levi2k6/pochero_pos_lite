@@ -7,6 +7,7 @@ import 'cash_received_dialog.dart';
 import 'local_database.dart';
 import 'models.dart';
 import 'payment_details_screen.dart';
+import 'payments_api.dart';
 import 'payments_repository.dart';
 import 'payments_screen.dart';
 import 'payments_store.dart';
@@ -18,17 +19,23 @@ const _uuid = Uuid();
 
 /// The POS scene: order on the left, product grid on the right.
 ///
-/// [repository] and [productsRepository] default to the sqflite store; tests
-/// inject fakes.
+/// [repository], [productsRepository], and [paymentsApi] default to the
+/// sqflite/REST implementations; tests inject fakes.
 class PosScreen extends StatefulWidget {
   const PosScreen({
     super.key,
     this.repository,
     this.productsRepository,
+    this.paymentsApi,
+    this.backendUrl = '',
+    this.onLogout,
   });
 
   final PaymentsRepository? repository;
   final ProductsRepository? productsRepository;
+  final PaymentsApi? paymentsApi;
+  final String backendUrl;
+  final VoidCallback? onLogout;
 
   @override
   State<PosScreen> createState() => _PosScreenState();
@@ -48,6 +55,10 @@ class _PosScreenState extends State<PosScreen> {
     _payments = PaymentsStore(
       repository: widget.repository ??
           SqflitePaymentsRepository(LocalDatabase.instance),
+      api: widget.paymentsApi ??
+          (widget.backendUrl.trim().isEmpty
+              ? null
+              : HttpPaymentsApi(baseUrl: widget.backendUrl)),
     )..load();
     _products = ProductsStore(
       repository: widget.productsRepository ??
@@ -170,6 +181,12 @@ class _PosScreenState extends State<PosScreen> {
             icon: const Icon(Icons.receipt_long_outlined),
             onPressed: _openPayments,
           ),
+          if (widget.onLogout != null)
+            IconButton(
+              tooltip: 'Logout',
+              icon: const Icon(Icons.logout),
+              onPressed: widget.onLogout,
+            ),
           const SizedBox(width: 8),
         ],
       ),

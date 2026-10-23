@@ -78,4 +78,23 @@ void main() {
 
     expect(await repository.loadPayments(), isEmpty);
   });
+
+  test('marks a payment as synced', () async {
+    final repository = SqflitePaymentsRepository(LocalDatabase.instance);
+    await repository.insertPayment(
+      Payment(
+        id: 'pay-2',
+        type: TransactionType.walkIn,
+        method: PaymentMethod.gcash,
+        amount: 185,
+        change: 0,
+        updatedAt: DateTime(2026, 10, 9, 15),
+      ),
+    );
+
+    await repository.markSynced('pay-2');
+
+    final loaded = await repository.loadPayments();
+    expect(loaded.single.dirty, isFalse);
+  });
 }
