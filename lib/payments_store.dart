@@ -1,18 +1,30 @@
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 
 import 'models.dart';
 import 'payments_api.dart';
 import 'payments_repository.dart';
 
+/// What a manual sync attempt did.
+class SyncResult {
+  const SyncResult({this.synced = 0, this.error});
+
+  /// How many payments were pushed and marked clean.
+  final int synced;
+
+  /// A human-readable failure message, or `null` on success.
+  final String? error;
+
+  bool get failed => error != null;
+
+  bool get upToDate => error == null && synced == 0;
+}
+
 /// Log of recorded payments.
 ///
 /// With a [PaymentsRepository] the log survives app restarts: [load] reads the
-/// stored payments and every [add] is persisted. With a [PaymentsApi] each new
-/// payment is pushed to the backend and marked clean on success; payments left
-/// dirty are retried on [load]. Without either it is in-memory only, so unit
-/// tests stay simple.
+/// stored payments and every [add] is persisted. With a [PaymentsApi] dirty
+/// payments can be pushed on demand via [syncPending] — nothing syncs on its
+/// own, so the backend is only called from the Sync screen.
 class PaymentsStore extends ChangeNotifier {
   PaymentsStore({this.repository, this.api});
 
@@ -30,8 +42,11 @@ class PaymentsStore extends ChangeNotifier {
   /// True while [load] is reading stored payments.
   bool get isLoading => _isLoading;
 
-  /// Replaces the in-memory log with the stored payments, then retries any
-  /// payments still waiting to sync.
+  /// Payments still waiting to be synced.
+  List<Payment> get pendingSync =>
+      _payments.where((payment) => payment.dirty).toList();
+
+  /// Replaces the in-memory log with the stored payments.
   Future<void> load() async {
     final repo = repository;
     if (repo == null) return;
@@ -47,15 +62,14 @@ class PaymentsStore extends ChangeNotifier {
       _isLoading = false;
       _notify();
     }
-    unawaited(_syncPending());
   }
 
-  /// Records [payment] in memory first, then persists and syncs it.
+  /// Records [payment] in memory first, then persists it. Nothing is sent to
+  /// the backend here; it stays dirty until [syncPending] runs.
   Future<void> add(Payment payment) async {
     _payments.add(payment);
     _notify();
     await repository?.insertPayment(payment);
-    await _sync(payment);
   }
 
   /// Removes [payment] from memory first, then from the repository.
@@ -65,27 +79,28 @@ class PaymentsStore extends ChangeNotifier {
     await repository?.deletePayment(payment.id);
   }
 
-  /// Pushes one payment to the backend and clears its dirty flag on success.
-  /// Failures are swallowed so the app keeps working offline; the payment stays
-  /// dirty and is retried on the next [load].
-  Future<void> _sync(Payment payment) async {
+  /// Pushes every dirty payment to the backend. Manual only.
+  Future<SyncResult> syncPending() async {
     final client = api;
-    if (client == null) return;
+    if (client == null) {
+      return const SyncResult(error: 'Backend is not configured.');
+    }
+    final pending = pendingSync;
+    if (pending.isEmpty) return const SyncResult();
 
     try {
-      await client.createPayment(payment);
-    } catch (_) {
-      return;
+      await client.sync(pending);
+    } catch (error) {
+      final message =
+          error is HttpPaymentsException ? error.message : '$error';
+      return SyncResult(error: message);
     }
-    await repository?.markSynced(payment.id);
-    _markSyncedInMemory(payment.id);
-  }
 
-  Future<void> _syncPending() async {
-    if (api == null) return;
-    for (final payment in List.of(_payments)) {
-      if (payment.dirty) await _sync(payment);
+    for (final payment in pending) {
+      await repository?.markSynced(payment.id);
+      _markSyncedInMemory(payment.id);
     }
+    return SyncResult(synced: pending.length);
   }
 
   void _markSyncedInMemory(String id) {

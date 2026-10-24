@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pochero_pos_lite/main.dart';
@@ -27,21 +29,20 @@ class _FakePaymentsRepository implements PaymentsRepository {
   Future<void> markSynced(String id) async => syncedIds.add(id);
 }
 
-/// In-memory [PaymentsApi]; throws when [fail] is set.
+/// In-memory [PaymentsApi]; can fail or wait on [completer].
 class _FakePaymentsApi implements PaymentsApi {
   _FakePaymentsApi({this.fail = false});
 
   final bool fail;
-  final List<Payment> created = [];
+  final List<Payment> synced = [];
+  Completer<void>? completer;
 
   @override
-  Future<void> createPayment(Payment payment) async {
+  Future<void> sync(List<Payment> payments) async {
+    if (completer != null) await completer!.future;
     if (fail) throw Exception('offline');
-    created.add(payment);
+    synced.addAll(payments);
   }
-
-  @override
-  Future<Map<String, dynamic>?> getPayment(String id) async => null;
 }
 
 /// In-memory [ProductsRepository] so widget tests never touch sqflite.
@@ -433,9 +434,10 @@ void main() {
     expect(find.text('Total (2)'), findsOneWidget);
   });
 
-  testWidgets('a confirmed payment syncs and is marked clean', (tester) async {
+  testWidgets('manual sync shows a spinner then a success message',
+      (tester) async {
     final repository = _FakePaymentsRepository();
-    final api = _FakePaymentsApi();
+    final api = _FakePaymentsApi()..completer = Completer<void>();
 
     await tester.pumpWidget(
       PocheroPosLiteApp(
@@ -450,20 +452,58 @@ void main() {
     await tester.tap(find.text('Pochero'));
     await tester.pump();
     await _confirmWithCash(tester, '500');
+    await _goBack(tester);
 
-    expect(api.created, hasLength(1));
-    expect(repository.syncedIds, contains(api.created.single.id));
+    await tester.tap(find.byTooltip('Sync'));
+    await tester.pumpAndSettle();
+    expect(find.text('Ready to sync'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Sync now'));
+    await tester.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.textContaining('Sending 1 payment'), findsOneWidget);
+
+    api.completer!.complete();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Synced 1 payment.'), findsOneWidget);
+    expect(repository.syncedIds, contains(api.synced.single.id));
   });
 
-  testWidgets('a payment stays dirty when sync fails', (tester) async {
+  testWidgets('manual sync reports when there is nothing to sync',
+      (tester) async {
+    final api = _FakePaymentsApi();
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: await _loggedInSession(),
+        repository: _FakePaymentsRepository(),
+        productsRepository: _FakeProductsRepository(),
+        paymentsApi: api,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Sync'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Sync now'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Everything is up to date.'), findsOneWidget);
+    expect(api.synced, isEmpty);
+  });
+
+  testWidgets('manual sync reports a failure and keeps payments dirty',
+      (tester) async {
     final repository = _FakePaymentsRepository();
+    final api = _FakePaymentsApi(fail: true);
 
     await tester.pumpWidget(
       PocheroPosLiteApp(
         session: await _loggedInSession(),
         repository: repository,
         productsRepository: _FakeProductsRepository(),
-        paymentsApi: _FakePaymentsApi(fail: true),
+        paymentsApi: api,
       ),
     );
     await tester.pumpAndSettle();
@@ -471,7 +511,14 @@ void main() {
     await tester.tap(find.text('Pochero'));
     await tester.pump();
     await _confirmWithCash(tester, '500');
+    await _goBack(tester);
 
+    await tester.tap(find.byTooltip('Sync'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Sync now'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Sync failed:'), findsOneWidget);
     expect(repository.syncedIds, isEmpty);
     expect(repository.payments.single.dirty, isTrue);
   });
@@ -565,5 +612,42 @@ void main() {
     expect(second.isLoggedIn, isTrue);
     expect(second.username, 'admin');
     expect(second.url, 'http://10.0.0.5:8080');
+  });
+
+  testWidgets('dirty payments show an unsynced indicator until synced',
+      (tester) async {
+    final repository = _FakePaymentsRepository();
+
+    await tester.pumpWidget(
+      PocheroPosLiteApp(
+        session: await _loggedInSession(),
+        repository: repository,
+        productsRepository: _FakeProductsRepository(),
+        paymentsApi: _FakePaymentsApi(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Pochero'));
+    await tester.pump();
+    await _confirmWithCash(tester, '500');
+
+    expect(find.text('Unsynced'), findsOneWidget);
+    await _goBack(tester);
+
+    await tester.tap(find.byTooltip('Payments'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unsynced'), findsOneWidget);
+    await _goBack(tester);
+
+    await tester.tap(find.byTooltip('Sync'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, 'Sync now'));
+    await tester.pumpAndSettle();
+    await _goBack(tester);
+
+    await tester.tap(find.byTooltip('Payments'));
+    await tester.pumpAndSettle();
+    expect(find.text('Unsynced'), findsNothing);
   });
 }

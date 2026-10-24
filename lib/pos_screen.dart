@@ -14,6 +14,7 @@ import 'payments_store.dart';
 import 'products_repository.dart';
 import 'products_screen.dart';
 import 'products_store.dart';
+import 'sync_screen.dart';
 
 const _uuid = Uuid();
 
@@ -165,6 +166,14 @@ class _PosScreenState extends State<PosScreen> {
     );
   }
 
+  void _openSync() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => SyncScreen(store: _payments),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -180,6 +189,11 @@ class _PosScreenState extends State<PosScreen> {
             tooltip: 'Payments',
             icon: const Icon(Icons.receipt_long_outlined),
             onPressed: _openPayments,
+          ),
+          IconButton(
+            tooltip: 'Sync',
+            icon: const Icon(Icons.sync),
+            onPressed: _openSync,
           ),
           if (widget.onLogout != null)
             IconButton(

@@ -139,6 +139,11 @@ class _InfoBox extends StatelessWidget {
               _InfoRow(label: 'Change', value: formatPeso(payment.change)),
               const SizedBox(height: 8),
               _InfoRow(label: 'Items', value: '$itemCount'),
+              const SizedBox(height: 8),
+              _InfoRow(
+                label: 'Sync',
+                value: payment.dirty ? 'Unsynced' : 'Synced',
+              ),
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,

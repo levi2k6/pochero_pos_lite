@@ -23,10 +23,11 @@ payments — and stops there.
   they survive restarts. The file lives in the platform **app-data directory**
   (e.g. `~/.local/share/pochero_pos_lite/` on Linux) — not in the project
   folder — so `flutter clean` and test runs can't wipe it.
-- New payments are **synced to the Go backend** over REST (`POST /payment`).
-  A payment is born `dirty`; it is marked clean only after the request succeeds,
-  and dirty payments are retried the next time the app loads. With no backend
-  URL configured the app runs fully offline.
+- Payments are **synced manually** to the Go backend: open the **Sync** screen
+  (sync icon in the app bar) and press **Sync now**. A payment is born `dirty`
+  and is marked clean only after `/sync` succeeds; dirty payments show an
+  **Unsynced** badge in the list and on their details. Nothing syncs
+  automatically. With no backend URL configured the app runs fully offline.
 
 ## Login & backend connection
 
@@ -40,24 +41,25 @@ Login is persisted with `shared_preferences` (current user + URL), so the app
 reopens signed in. Use the logout icon in the POS app bar to sign out (and change
 the URL). There is no backend user table yet, so users are not synced.
 
-`GET /payment/{id}` is also implemented (`HttpPaymentsApi.getPayment`) for
-future reads.
-
-`POST /payment` sends:
+`POST /sync` sends the dirty payments:
 
 ```json
 {
-  "id": "<uuid>",
-  "transaction_type": "walkIn | delivery",
-  "method": "cash | gcash",
-  "paid_amount": 500.0,
-  "change_amount": 315.0,
-  "items": [{ "name": "Pochero", "quantity": 2, "unit_price": 185.0 }]
+  "payments": [
+    {
+      "id": "<uuid>",
+      "transaction_type": "walkIn | delivery",
+      "method": "cash | gcash",
+      "paid_amount": 500.0,
+      "change_amount": 315.0
+    }
+  ]
 }
 ```
 
-Adjust `paymentPayload` in `payments_api.dart` if the Go handler expects a
-different shape.
+Only the backend `payment` columns are sent for now; more entity types will join
+the payload later. Adjust `paymentPayload` in `payments_api.dart` if the Go
+handler expects a different shape.
 
 ## Deliberately not here yet
 
@@ -76,9 +78,10 @@ lib/
 ├── session_store.dart           # current user + backend URL (persisted)
 ├── auth_screen.dart             # login form: URL, username, password
 ├── models.dart                  # enums, value objects, formatters
-├── payments_store.dart          # payment log + REST sync (ChangeNotifier)
+├── payments_store.dart          # payment log + manual sync (ChangeNotifier)
 ├── products_store.dart          # product list + order + recipes (ChangeNotifier)
 ├── pos_screen.dart              # the POS: cart + product grid
+├── sync_screen.dart             # manual sync: spinner + result messages
 ├── cash_received_dialog.dart    # method + amount before confirming
 ├── payments_screen.dart         # list of recorded payments
 ├── payment_details_screen.dart  # one payment's info box + items table

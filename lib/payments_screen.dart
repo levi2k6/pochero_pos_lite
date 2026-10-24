@@ -140,6 +140,45 @@ class _PaymentTotalBar extends StatelessWidget {
   }
 }
 
+/// Marks a payment that has not been synced to the backend yet.
+class _DirtyBadge extends StatelessWidget {
+  const _DirtyBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Tooltip(
+      message: 'Waiting to be synced',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.tertiaryContainer,
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.sync_problem,
+              size: 12,
+              color: theme.colorScheme.onTertiaryContainer,
+            ),
+            const SizedBox(width: 3),
+            Text(
+              'Unsynced',
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.colorScheme.onTertiaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _PaymentTile extends StatelessWidget {
   const _PaymentTile({required this.payment, required this.store});
 
@@ -170,8 +209,20 @@ class _PaymentTile extends StatelessWidget {
           fontWeight: FontWeight.w600,
         ),
       ),
-      subtitle: Text(
-        '${payment.type.label} • ${payment.method.label} • #$shortId',
+      subtitle: Row(
+        children: [
+          Expanded(
+            child: Text(
+              '${payment.type.label} • ${payment.method.label} • #$shortId',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (payment.dirty) ...[
+            const SizedBox(width: 8),
+            const _DirtyBadge(),
+          ],
+        ],
       ),
       trailing: Column(
         mainAxisAlignment: MainAxisAlignment.center,

@@ -29,6 +29,7 @@ lib/
 ├── payment_details_screen.dart  # one payment: info box + items table
 ├── products_screen.dart         # product records: reorder + add
 ├── product_details_screen.dart  # one product: info box + recipe
+├── sync_screen.dart             # manual sync: spinner + result messages
 ├── payments_api.dart            # PaymentsApi + REST client for the Go backend
 ├── payments_repository.dart     # PaymentsRepository + SqflitePaymentsRepository
 ├── products_repository.dart     # ProductsRepository + SqfliteProductsRepository
@@ -123,7 +124,7 @@ items      a snapshot copy of the cart lines
 dirty      true (still needs syncing)
 ```
 
-### 8. Login + REST sync (`session_store.dart`, `auth_screen.dart`, `payments_api.dart`)
+### 8. Login + manual sync (`session_store.dart`, `auth_screen.dart`, `sync_screen.dart`, `payments_api.dart`)
 Login is a local gate, persisted with `shared_preferences`:
 
 - `SessionStore` (a `ChangeNotifier`) holds the current `username` and `url`.
@@ -136,16 +137,18 @@ Login is a local gate, persisted with `shared_preferences`:
 - `PocheroPosLiteApp` listens to the session and shows `AuthScreen` when signed
   out, `PosScreen` when signed in. The POS app bar has a logout action.
 
-`PaymentsApi` is the remote contract; `HttpPaymentsApi` implements it with
-`package:http` against the Go backend:
+Sync is **manual only** — nothing calls the backend on its own:
 
-- `POST /payment` with `paymentPayload(payment)` — snake_case columns from the
-  `payment` table plus an `items` array; `GET /payment/{id}` returns raw JSON.
-- The base URL is `SessionStore.url`, passed down as `PosScreen.backendUrl`.
-- `PaymentsStore.add` persists locally first (dirty), then calls `createPayment`.
-  On success it calls `PaymentsRepository.markSynced(id)` (sets `dirty = 0`) and
-  updates the in-memory payment; on failure the payment stays dirty.
-- `load()` fires `_syncPending()` so dirty payments are retried on startup.
+- `PaymentsStore.pendingSync` returns dirty payments; `syncPending()` POSTs them
+  to `/sync` and marks each clean (`markSynced`, in-memory + DB) on success.
+- `add()` only persists locally; `load()` only reads the DB. No auto-retry.
+- `SyncScreen` is opened from the POS app bar. It shows a large
+  `CircularProgressIndicator` while `syncPending()` runs and a message after
+  ("Synced N payment(s).", "Everything is up to date.", "Sync failed: …").
+- `PaymentsApi` is the remote contract (`HttpPaymentsApi` uses `package:http`).
+  `POST /sync` sends `{ "payments": [ …payment columns… ] }`; more entity types
+  will join the payload later. The base URL is `SessionStore.url`.
+- Keep `dirty` as the outbox for manual sync; don't re-add automatic triggers.
 
 ## Database (sqflite)
 
@@ -199,9 +202,10 @@ Mirror the full app's detail screen so the two stay visually consistent:
 1. Can it be done with the existing models + a `setState` or the store? Do that.
 2. New persisted data → a table file + `LocalDatabase` change + repository
    methods. Keep it to what the feature needs; no generic data layer.
-3. Remote calls go through `PaymentsApi` (add a method) and are best-effort;
-   keep the local store as the source of truth. Recipes/inventory or `provider`
-   are still the full app's territory — ask first.
+3. Remote calls go through `PaymentsApi` (add a method) and are triggered only
+   from an explicit UI action — never automatically. Keep the local store as the
+   source of truth. Recipes/inventory or `provider` are still the full app's
+   territory — ask first.
 4. Build the screen from small private widgets; reuse `formatPeso`.
 5. Add a widget test (fake repository) and, for persistence, a real-sqlite test
    under `test/`; for REST, test against `MockClient` (`package:http/testing`).
